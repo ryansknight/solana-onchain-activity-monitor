@@ -17,6 +17,7 @@ home-IP-exposure concern and no proxy needed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
@@ -142,6 +143,14 @@ def _node_label(url: str) -> str:
     return _region(url) or _mask_url(url)
 
 
+class RpcAppError(RuntimeError):
+    """A JSON-RPC *application* error (the node answered with an `error` payload).
+    Distinct from a transport/availability failure: it means the request itself
+    was rejected (bad params, unsupported range, ...), NOT that the node is
+    unhealthy -- so the pool must NOT fail over or cool the node on it (every
+    node would reject it identically, and a healthy node would be benched)."""
+
+
 def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
@@ -154,7 +163,7 @@ def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     )
     data = _http(req, timeout=timeout)
     if "error" in data:
-        raise RuntimeError(f"RPC {method} error: {data['error']}")
+        raise RpcAppError(f"RPC {method} error: {data['error']}")
     return data["result"]
 
 
@@ -162,11 +171,15 @@ class RpcPool:
     """Ordered RPC endpoints with automatic failover and self-healing failback.
 
     A call always prefers the highest-priority endpoint NOT currently in a
-    failure cooldown; on any error it cools that endpoint down (exponential
-    backoff, capped) and falls through to the next one. Because selection always
-    restarts from the top, a recovered primary reclaims traffic on its own as
-    soon as its cooldown lapses -- no background probe thread, no manual reset.
-    Thread-safe: the surge loop fires ~12 calls/tick, several concurrently.
+    failure cooldown; on a transport/availability error it cools that endpoint
+    down (exponential backoff, capped) and falls through to the next one. Because
+    selection always restarts from the top, a recovered primary reclaims traffic
+    on its own as soon as its cooldown lapses -- no background probe thread, no
+    manual reset. Thread-safe: the surge loop fires ~12 calls/tick concurrently.
+
+    JSON-RPC *application* errors (RpcAppError) are NOT failover events -- they
+    raise straight through without cooling or switching, since every node would
+    reject the request identically (see RpcAppError).
     """
     BASE_COOLDOWN = 20.0   # seconds for a first failure
     MAX_COOLDOWN = 300.0   # cap after repeated failures
@@ -204,6 +217,10 @@ class RpcPool:
                         print(f"[rpc] switched to {_node_label(e['url'])} "
                               f"(from {_node_label(prev)})", flush=True)
                 return result
+            except RpcAppError:
+                # request-level rejection, not a node-health signal: don't cool
+                # or fail over -- the caller's try/except handles it.
+                raise
             except Exception as exc:
                 last_exc = exc
                 with self._lock:
@@ -228,7 +245,7 @@ class RpcPool:
                 "region": _region(e["url"]),         # short code (FRA/AMS/NY) or null
                 "priority": i,                       # 0 = primary
                 "healthy": e["failed_until"] <= now,
-                "cooldown_s": max(0, round(e["failed_until"] - now)),
+                "cooldown_s": max(0, math.ceil(e["failed_until"] - now)),
                 "active": e["url"] == self._active,
             } for i, e in enumerate(self._eps)]
 
@@ -238,6 +255,15 @@ def rpc_call(endpoint, method: str, params=None, timeout: int = 20):
     if isinstance(endpoint, RpcPool):
         return endpoint.call(method, params, timeout)
     return _rpc_call_one(endpoint, method, params, timeout)
+
+
+def build_pool(override=None):
+    """Build the RpcPool shared by both entry points. `override` is an optional
+    comma/space-separated endpoint list (the `--rpc` flag); a blank/empty
+    override (incl. whitespace-only) cleanly falls back to the configured
+    RPC_ENDPOINTS instead of crashing. Returns (pool, endpoints)."""
+    endpoints = _split_urls(override) or RPC_ENDPOINTS
+    return RpcPool(endpoints), endpoints
 
 
 def _gecko_get(path: str, timeout: int = 20):

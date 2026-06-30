@@ -280,8 +280,7 @@ def main():
     ap.add_argument("--csv-dir", default=os.path.join(HERE, "data"))
     args = ap.parse_args()
 
-    endpoints = sources._split_urls(args.rpc) if args.rpc else sources.RPC_ENDPOINTS
-    rpc = sources.RpcPool(endpoints)
+    rpc, endpoints = sources.build_pool(args.rpc)
     _state["rpc"] = rpc.status()
 
     _state["interval"] = args.interval

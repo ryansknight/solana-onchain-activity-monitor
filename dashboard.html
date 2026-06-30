@@ -482,7 +482,9 @@ function render(j){
     else{
       const act=rpc.find(e=>e.active)||rpc[0];
       const nm=act.region||act.endpoint.split('.')[0];
-      const onPrimary=act.priority===0&&act.healthy;
+      // green = the active node IS the primary (cooldown state is irrelevant
+      // here -- `act` is whatever is actually serving traffic)
+      const onPrimary=act.priority===0;
       rb.className='rpcbadge'+(onPrimary?'':' warn');
       rb.innerHTML='<span class="dot"></span>'+(onPrimary
         ?'RPC ('+nm+')'

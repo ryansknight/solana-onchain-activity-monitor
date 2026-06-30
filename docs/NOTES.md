@@ -114,9 +114,21 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   masked host); `/api/data` `rpc[]` carries both `region` and masked `endpoint`,
   and the dashboard badge shows the region with the codename in its tooltip.
   Region labels are cosmetic — update `RPC_REGIONS` if the nodes change.
-- **Failover is transport-agnostic:** ANY exception (DNS/conn/timeout/HTTP 4xx-5xx
-  /JSON-RPC error) trips it. If all endpoints fail, the last exception propagates
-  — same degradation as the old single-URL path.
+- **Only transport/availability errors fail over:** DNS / connection / timeout /
+  HTTP 4xx-5xx (incl. 429) cool a node and advance to the next. JSON-RPC
+  *application* errors (`data["error"]` → `RpcAppError`) do NOT — they raise
+  straight through without cooling or switching. Rationale: methods like
+  `getBlockProduction` with a `firstSlot` range legitimately return errors
+  (`network_health` already wraps them in try/except); treating those as
+  node-health failures would bench a healthy node and flap traffic for no
+  outage, and every node would reject the request identically anyway. If all
+  endpoints fail a transport error, the last exception propagates — same
+  degradation as the old single-URL path.
+- **Escalating backoff applies across cooldown cycles, not within one:** a node
+  is re-probed only after its cooldown lapses, and each *post-lapse* failure
+  bumps the streak (20s→300s). A single-endpoint pool is the exception — it has
+  nowhere to fail over, so it keeps retrying the only node every tick (the
+  streak stays at the base), which is the desired behaviour there.
 
 ---
 

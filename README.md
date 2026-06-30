@@ -62,10 +62,13 @@ SOLANA_RPC_FALLBACKS=https://<backup-1>/<token>, https://<backup-2>/<token>
 ```
 
 Behaviour (`sources.RpcPool`): every call prefers the highest-priority node that
-isn't in a failure cooldown; on any error (timeout / connection / HTTP 4xx-5xx /
-JSON-RPC error) it cools that node down briefly and falls through to the next.
-A recovered node is **automatically promoted back** to primary once its cooldown
-lapses — no manual reset. Live status (which node is active, per-node health,
+isn't in a failure cooldown; on a transport/availability error (timeout /
+connection / HTTP 4xx-5xx incl. 429) it cools that node down briefly and falls
+through to the next. JSON-RPC *application* errors (a node answering with an
+`error` payload — e.g. an out-of-range query) are **not** treated as failover
+events; they raise through without benching the node. A recovered node is
+**automatically promoted back** to primary once its cooldown lapses — no manual
+reset. Live status (which node is active, per-node health,
 optional region label) is exposed at `/api/data` under `rpc[]` and shown as a
 badge in the dashboard header. Leave `SOLANA_RPC_FALLBACKS` blank to run a single
 node — behaviour is then identical to before.

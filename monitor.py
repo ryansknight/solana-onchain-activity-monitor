@@ -299,15 +299,14 @@ def main():
     ap.add_argument("--csv-dir", default=os.path.join(os.path.dirname(__file__), "data"))
     args = ap.parse_args()
 
-    endpoints = sources._split_urls(args.rpc) if args.rpc else sources.RPC_ENDPOINTS
-    rpc = sources.RpcPool(endpoints)
+    rpc, endpoints = sources.build_pool(args.rpc)
 
     os.makedirs(args.csv_dir, exist_ok=True)
     tracker = SurgeTracker()
     for r in read_history_rows(args.csv_dir):
         tracker.update(r)
     print(f"RPC pool ({len(endpoints)}): "
-          f"{', '.join(sources._mask_url(e) for e in endpoints)}", file=sys.stderr)
+          f"{', '.join(sources._node_label(e) for e in endpoints)}", file=sys.stderr)
     print(f"poll every {args.interval}s · CSV -> {args.csv_dir}/activity_<date>.csv",
           file=sys.stderr)
 
