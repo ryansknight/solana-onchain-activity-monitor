@@ -24,6 +24,10 @@
   .fresh{font-size:11px;color:var(--mut);font-weight:400;letter-spacing:0;text-transform:none;white-space:nowrap}
   .solprice{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap}
   .solprice .chg{margin-left:5px;font-weight:600}
+  .rpcbadge{font-size:11px;color:var(--mut);margin-top:3px;white-space:nowrap}
+  .rpcbadge .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    margin-right:4px;vertical-align:middle;background:var(--green)}
+  .rpcbadge.warn{color:var(--orange)} .rpcbadge.warn .dot{background:var(--orange)}
   .surge-live-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
   .refresh-bar{height:2px;width:64px;border-radius:2px;background:var(--green);transform-origin:left;transform:scaleX(0)}
   .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
@@ -120,6 +124,7 @@
   <h1>SOLANA ON-CHAIN ACTIVITY</h1>
   <div class="meta">
     <div class="solprice" id="solprice"></div>
+    <div class="rpcbadge" id="rpcbadge"></div>
   </div>
 </header>
 
@@ -470,6 +475,23 @@ function render(j){
   const ji=j.jito||{};
   setTxt('jito-p50',sol(ji.p50));setTxt('jito-p75',sol(ji.p75));
   setTxt('jito-p95',sol(ji.p95));setTxt('jito-p99',sol(ji.p99));
+  // RPC failover health — green when on the primary, orange when failed over
+  const rpc=j.rpc||[],rb=document.getElementById('rpcbadge');
+  if(rb){
+    if(!rpc.length){rb.textContent='';rb.className='rpcbadge';}
+    else{
+      const act=rpc.find(e=>e.active)||rpc[0];
+      const nm=act.region||act.endpoint.split('.')[0];
+      const onPrimary=act.priority===0&&act.healthy;
+      rb.className='rpcbadge'+(onPrimary?'':' warn');
+      rb.innerHTML='<span class="dot"></span>'+(onPrimary
+        ?'RPC ('+nm+')'
+        :'RPC failover → ('+nm+')');
+      rb.title=rpc.map(e=>(e.active?'▶ ':'   ')
+        +(e.region?e.region+' — ':'')+e.endpoint
+        +(e.healthy?'':' (cooldown '+e.cooldown_s+'s)')).join('\n');
+    }
+  }
   // verdict
   const v=computeVerdict(hist);
   const vh=document.getElementById('vhead');vh.textContent=v.head;vh.style.color=v.color;

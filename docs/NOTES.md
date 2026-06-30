@@ -90,6 +90,34 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
 - **At very high rates 1000 sigs span <1 slot** — floor the span at 1 slot so the
   busiest venue (pumpswap) still yields a rate instead of dropping out.
 
+### RPC failover (`sources.RpcPool`)
+
+- **Config:** `SOLANA_RPC` is the primary; `SOLANA_RPC_FALLBACKS` is an ordered,
+  comma/space-separated list. `sources.RPC_ENDPOINTS` = primary + fallbacks
+  (de-duped). `DEFAULT_RPC` stays as an alias for the primary (back-compat).
+- **One chokepoint:** every fetcher threads its `rpc` arg into `sources.rpc_call`,
+  which now dispatches on type — an `RpcPool` (failover) or a plain URL string
+  (direct, unchanged). So the pool is passed wherever a URL string used to go;
+  no fetcher signatures changed.
+- **Why cooldown-based, not a health-checker thread:** selection always restarts
+  from the highest-priority endpoint NOT in cooldown. A failed endpoint gets a
+  short exponential-backoff cooldown (20s → 300s cap); when it lapses the
+  endpoint is naturally probed first again, so a recovered primary **reclaims
+  traffic on its own** — no extra thread, no manual reset, no flapping state.
+- **Concurrency:** the surge loop fires ~12 calls/tick, several in parallel
+  (`meme_trade_rate`). The pool is lock-guarded, and the streak/backoff only
+  escalates on a *genuinely fresh* failure (`failed_until <= now`) so concurrent
+  siblings in the same tick don't inflate the cooldown.
+- **Tokens never leak:** `_mask_url` (host + last-4) is the most a token-bearing
+  URL is ever rendered as. Logs and the startup banner use `_node_label`
+  (region code via `RPC_REGIONS`, e.g. `FRA`/`AMS`/`NY`, falling back to the
+  masked host); `/api/data` `rpc[]` carries both `region` and masked `endpoint`,
+  and the dashboard badge shows the region with the codename in its tooltip.
+  Region labels are cosmetic — update `RPC_REGIONS` if the nodes change.
+- **Failover is transport-agnostic:** ANY exception (DNS/conn/timeout/HTTP 4xx-5xx
+  /JSON-RPC error) trips it. If all endpoints fail, the last exception propagates
+  — same degradation as the old single-URL path.
+
 ---
 
 ## 5. Why no gRPC (Yellowstone/Geyser)
