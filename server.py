@@ -132,17 +132,21 @@ def _refresh_baseline():
 def _surge_context(cur):
     """Where the current surge sits in the trailing-week distribution: its
     percentile plus reference points (typical p50, p95, peak). None until there
-    is enough history (~5 min) for the comparison to mean anything."""
+    are enough samples (>=60) for the comparison to mean anything."""
     scores = _baseline_sorted
     n = len(scores)
     if cur is None or n < 60:
         return None
-    q = lambda p: scores[min(n - 1, int(p * n))]
+    q = lambda p: scores[min(n - 1, int(p * (n - 1)))]   # standard nearest-rank
     span_h = (_baseline[-1][0] - _baseline[0][0]) / 3600 if len(_baseline) > 1 else 0
     return {
-        "percentile": round(100 * bisect.bisect_right(scores, cur) / n),
-        "p50": q(0.50), "p95": q(0.95), "max": scores[-1],
-        "hours": round(span_h), "n": n,
+        # strictly-less count, capped: the cached distribution lags the live value
+        # by up to a minute, so a fresh high must not read a contradictory 100%
+        "percentile": min(99, round(100 * bisect.bisect_left(scores, cur) / n)),
+        "is_peak": cur >= scores[-1],          # at/above the trailing-week high
+        "p50": q(0.50), "p95": q(0.95),
+        "max": max(scores[-1], cur),           # never below the live value
+        "hours": span_h, "n": n,
     }
 
 

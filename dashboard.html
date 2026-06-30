@@ -517,10 +517,16 @@ function render(j){
   setTxt('jito-p50',sol(ji.p50));setTxt('jito-p75',sol(ji.p75));
   setTxt('jito-p95',sol(ji.p95));setTxt('jito-p99',sol(ji.p99));
   // "tip to land now": recommend a tip percentile scaled to current congestion
+  const TIP_ORDER=['p50','p75','p95','p99'];
   const TIP_REC={CALM:['p50','median · calm'],BUSY:['p75','competitive'],
     ELEVATED:['p95','high contention'],SURGE:['p99','top — surging']};
-  const [tpk,tlab]=TIP_REC[lvl]||TIP_REC.CALM, jr=document.getElementById('jrec');
-  if(jr){const tv=ji[tpk];
+  const [wantk,tlab]=TIP_REC[lvl]||TIP_REC.CALM;
+  // use the wanted percentile, else fall back to the nearest lower tier with data
+  let tpk=wantk, tv=ji[wantk];
+  if(tv==null)for(let i=TIP_ORDER.indexOf(wantk)-1;i>=0;i--){
+    if(ji[TIP_ORDER[i]]!=null){tpk=TIP_ORDER[i];tv=ji[tpk];break;}}
+  const jr=document.getElementById('jrec');
+  if(jr){
     jr.innerHTML=(tv==null)
       ? '<span class="tag">tip floor unavailable</span>'
       : `<span>To land a bundle now</span> <b style="color:${col}">${sol(tv)} SOL</b>`
@@ -554,10 +560,13 @@ function render(j){
   if(vc){
     if(!ctx){vc.textContent='';}
     else{
-      const span=ctx.hours>=48?Math.round(ctx.hours/24)+'d':ctx.hours+'h';
-      vc.innerHTML=`Right now is higher than <b style="color:${col}">${ctx.percentile}%</b>`
-        +` of the past ${span} <span style="color:var(--mut)">· typical ${Math.round(ctx.p50)}`
-        +` · peak ${Math.round(ctx.max)}</span>`;
+      const h=ctx.hours;
+      const win=h<1?'data so far':('past '+(h>=48?Math.round(h/24)+'d':Math.round(h)+'h'));
+      vc.innerHTML=ctx.is_peak
+        ? `Right now is a <b style="color:${col}">new high</b> for the ${win} `
+          +`<span style="color:var(--mut)">· typical ${Math.round(ctx.p50)}</span>`
+        : `Higher than <b style="color:${col}">${ctx.percentile}%</b> of the ${win} `
+          +`<span style="color:var(--mut)">· typical ${Math.round(ctx.p50)} · peak ${Math.round(ctx.max)}</span>`;
     }
   }
   // what's driving the surge: signals elevated above baseline + busiest venues
