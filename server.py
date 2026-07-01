@@ -20,8 +20,6 @@ from __future__ import annotations
 import argparse
 import bisect
 import calendar
-import csv
-import glob
 import json
 import os
 import threading
@@ -31,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import monitor
 import sources
+import store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -89,42 +88,20 @@ def _sample_from_row(row, t):
     return s
 
 
-def _seed_history(csv_dir):
-    """Pre-populate the charts from CSV so they aren't empty on startup.
-    The recent chart uses today's rows; the 24h chart uses today + yesterday,
-    filtered to the last 24h."""
-    today = time.strftime("%Y%m%d", time.gmtime())
-    yest = time.strftime("%Y%m%d", time.gmtime(time.time() - 86400))
-    cutoff = time.time() - 86400
-
-    for r in monitor.read_history_rows(csv_dir, day=today):
+def _seed_history(db):
+    """Pre-populate the charts from the DB so they aren't empty on startup: the
+    last 24h of rows feed both the recent (deque self-limits) and 24h buffers."""
+    for r in store.read_since(db, 86400):
         t = _ts_to_epoch(r.get("timestamp_utc"))
-        if t is not None:
-            _state["history"].append(_sample_from_row(r, t))
-
-    seen = []
-    for day in (yest, today):
-        for r in monitor.read_history_rows(csv_dir, day=day):
-            t = _ts_to_epoch(r.get("timestamp_utc"))
-            if t is not None and t >= cutoff:
-                seen.append({"t": t, "surge_score": r.get("surge_score")})
-    seen.sort(key=lambda s: s["t"])
-    _state["history24h"].extend(seen)
+        if t is None:
+            continue
+        _state["history"].append(_sample_from_row(r, t))
+        _state["history24h"].append({"t": t, "surge_score": r.get("surge_score")})
 
 
-def _seed_baseline(csv_dir):
-    """Seed the trailing-week surge_score distribution from the daily CSVs."""
-    cutoff = time.time() - _BASELINE_DAYS * 86400
-    pts = []
-    for d in range(_BASELINE_DAYS):
-        day = time.strftime("%Y%m%d", time.gmtime(time.time() - d * 86400))
-        for r in monitor.read_history_rows(csv_dir, day=day):
-            t = _ts_to_epoch(r.get("timestamp_utc"))
-            s = r.get("surge_score")
-            if t is not None and s is not None and t >= cutoff:
-                pts.append((t, s))
-    pts.sort()
-    _baseline.extend(pts)
+def _seed_baseline(db):
+    """Seed the trailing-week surge_score distribution from the DB (SQL slice)."""
+    _baseline.extend(store.read_scores_since(db, _BASELINE_DAYS * 86400))
     _refresh_baseline()
 
 
@@ -178,17 +155,16 @@ def _downsample(samples, n=240):
     return {"t": out_t, "surge_score": out_v}
 
 
-def _surge_loop(rpc, interval, csv_dir):
+def _surge_loop(rpc, interval, db):
     """Fast loop: RPC-only (no GeckoTerminal). Drives the surge gauge + charts.
     HelloMoon handles 7 calls/tick easily, so this can run every few seconds.
     Period-accurate: sleeps interval minus the time the tick actually took."""
     global _pump
-    os.makedirs(csv_dir, exist_ok=True)
     tracker = monitor.SurgeTracker()
-    for r in monitor.read_history_rows(csv_dir):
+    for r in store.read_recent(db, 2000):     # warm the rolling baselines
         tracker.update(r)
-    _seed_history(csv_dir)
-    _seed_baseline(csv_dir)
+    _seed_history(db)
+    _seed_baseline(db)
     try:
         import pumpstream
         _pump = pumpstream.PumpStream()
@@ -226,8 +202,7 @@ def _surge_loop(rpc, interval, csv_dir):
             score, level, comps = tracker.compute(row)
             row["surge_score"], row["surge_level"] = score, level
 
-            day = time.strftime("%Y%m%d", time.gmtime())
-            monitor.append_csv(os.path.join(csv_dir, f"activity_{day}.csv"), row)
+            store.append(db, row)
             tracker.update(row)
 
             now = time.time()
@@ -396,16 +371,22 @@ def main():
                          "bandwidth: ~6 MB x this, per --block-interval)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8888)
-    ap.add_argument("--csv-dir", default=os.path.join(HERE, "data"))
+    ap.add_argument("--db", default=os.path.join(HERE, "data", "monitor.db"),
+                    help="SQLite history DB (was per-day CSVs)")
     args = ap.parse_args()
 
     rpc, endpoints = sources.build_pool(args.rpc)
     _state["rpc"] = rpc.status()
 
+    # one-time: fold any legacy per-day CSVs into the DB (no-op once populated)
+    imported = store.import_csvs(args.db, os.path.dirname(args.db))
+    if imported:
+        print(f"imported {imported} rows from legacy CSVs into {args.db}")
+
     _state["interval"] = args.interval
     _state["movers_interval"] = args.movers_interval
     threading.Thread(target=_surge_loop,
-                     args=(rpc, args.interval, args.csv_dir), daemon=True).start()
+                     args=(rpc, args.interval, args.db), daemon=True).start()
     threading.Thread(target=_movers_loop,
                      args=(args.movers_interval,), daemon=True).start()
     if args.block_interval > 0:
