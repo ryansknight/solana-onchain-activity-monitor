@@ -152,6 +152,25 @@ class RpcAppError(RuntimeError):
     node would reject it identically, and a healthy node would be benched)."""
 
 
+class RpcRateLimit(RuntimeError):
+    """The node rate-limited us -- an HTTP 429 OR a JSON-RPC 'rate exceeded' error
+    body (HTTP 200). Unlike a plain RpcAppError this DOES fail over and cool the
+    node (a different endpoint/token may not be throttled), and it's the signal
+    the tool exists to warn about. NOT a subclass of RpcAppError on purpose."""
+
+
+def _looks_ratelimited(err) -> bool:
+    """Whether a JSON-RPC error body signals rate limiting (providers vary)."""
+    if isinstance(err, dict):
+        code, msg = err.get("code"), str(err.get("message", "")).lower()
+    else:
+        code, msg = None, str(err).lower()
+    if code in (429, -32005, -32429):        # common rate-limit codes across providers
+        return True
+    return ("rate limit" in msg or "rate-limit" in msg or "rate exceeded" in msg
+            or "too many" in msg or "429" in msg)
+
+
 def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
@@ -164,14 +183,17 @@ def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     )
     data = _http(req, timeout=timeout)
     if "error" in data:
+        if _looks_ratelimited(data["error"]):    # 429 as a 200 body -> fail over + count
+            raise RpcRateLimit(f"RPC {method} rate-limited: {data['error']}")
         raise RpcAppError(f"RPC {method} error: {data['error']}")
     return data["result"]
 
 
 def _is_ratelimit(exc) -> bool:
-    """True for an HTTP 429 (Too Many Requests) -- the rate-limit signal the
-    whole tool exists to warn about."""
-    return isinstance(exc, urllib.error.HTTPError) and exc.code == 429
+    """True for a rate-limit signal -- HTTP 429 or a JSON-body 'rate exceeded'
+    (RpcRateLimit) -- the thing the whole tool exists to warn about."""
+    return isinstance(exc, RpcRateLimit) or (
+        isinstance(exc, urllib.error.HTTPError) and exc.code == 429)
 
 
 class RpcPool:
@@ -243,8 +265,9 @@ class RpcPool:
                 print(f"[rpc] {_node_label(e['url'])} failed on {method}: {exc} "
                       f"-> cooldown {int(backoff)}s", flush=True)
                 continue
+            dt = time.time() - t0        # measure the round trip, not lock-wait
             with self._lock:
-                e["calls"].append((time.time() - t0, "ok"))
+                e["calls"].append((dt, "ok"))
                 e["streak"] = 0
                 e["failed_until"] = 0.0
                 if self._active != e["url"]:
@@ -267,10 +290,12 @@ class RpcPool:
             out = []
             for i, e in enumerate(self._eps):
                 calls = list(e["calls"])
-                n = len(calls)
                 oks = sorted(lat for lat, s in calls if s == "ok")
                 errs = sum(1 for _, s in calls if s == "error")
                 r429 = sum(1 for _, s in calls if s == "ratelimited")
+                # denominator excludes app rejections (not a node-health signal),
+                # so a spate of unsupported-method errors can't dilute the rates
+                hn = len(oks) + errs + r429
                 out.append({
                     "endpoint": _mask_url(e["url"]),
                     "region": _region(e["url"]),     # short code (FRA/AMS/NY) or null
@@ -280,9 +305,9 @@ class RpcPool:
                     "active": e["url"] == self._active,
                     "lat_p50_ms": pct(oks, 0.50),
                     "lat_p99_ms": pct(oks, 0.99),
-                    "err_rate": round(errs / n, 3) if n else None,
-                    "rate_limited": round(r429 / n, 3) if n else None,
-                    "samples": n,
+                    "err_rate": round(errs / hn, 3) if hn else None,
+                    "rate_limited": round(r429 / hn, 3) if hn else None,
+                    "samples": hn,
                 })
             return out
 
