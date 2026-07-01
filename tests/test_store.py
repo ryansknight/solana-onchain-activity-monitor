@@ -91,14 +91,19 @@ class StoreTest(unittest.TestCase):
         iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
         hour_a = time.gmtime(base).tm_hour
         hour_b = time.gmtime(base - 3600).tm_hour
-        for i in range(80):                          # 80 in hour A (>= min 60)
-            store.append(self.db, self._row(iso(base - i), 10 + (i % 3)))  # 10..12
-        for i in range(5):                           # 5 in hour B (< min 60)
+        # hour A: 2 distinct days (today + yesterday, same UTC hour) -> qualifies
+        for i in range(40):
+            store.append(self.db, self._row(iso(base - i), 10 + (i % 3)))          # today
+        for i in range(40):
+            store.append(self.db, self._row(iso(base - 86400 - i), 10 + (i % 3)))  # yesterday
+        # hour B: 80 samples but only ONE day -> fails the min_days=2 guard
+        for i in range(80):
             store.append(self.db, self._row(iso(base - 3600 - i), 99))
-        tod = store.hourly_baselines(self.db, ["surge_score"], days=7, min_samples=60)
+        tod = store.hourly_baselines(self.db, ["surge_score"],
+                                     days=7, min_samples=60, min_days=2)
         hrs = tod.get("surge_score", {})
-        self.assertIn(hour_a, hrs)                    # enough samples -> bucket
-        self.assertNotIn(hour_b, hrs)                # too few -> filtered out
+        self.assertIn(hour_a, hrs)                    # 2 days x 40 -> bucket
+        self.assertNotIn(hour_b, hrs)                # 80 samples but 1 day -> filtered
         center, sigma = hrs[hour_a]
         self.assertAlmostEqual(center, 11, delta=1)  # median of 10..12
         self.assertGreaterEqual(sigma, 0.0)

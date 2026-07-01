@@ -180,6 +180,9 @@ class SurgeTracker:
             val = row.get(key)
             present = val is not None and val != ""
             if baselines and key in baselines:
+                # time-of-day override. The seed floor still applies (guards a
+                # signal that idles near zero at this hour); it can blunt an
+                # unusually-tight hour, but that's preferred over false alarms.
                 center, sigma = baselines[key]
                 center, scale, source = center, _floor_scale(sigma, center, seed), "hour"
             else:

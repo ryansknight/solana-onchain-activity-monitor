@@ -305,7 +305,7 @@ def _block_loop(rpc, interval, samples):
         time.sleep(max(2.0, interval - (time.time() - start)))
 
 
-def _tod_loop(db, days, min_samples, interval=1800):
+def _tod_loop(db, days, min_samples, min_days, interval=1800):
     """Slow loop: rebuild the per-signal, per-hour baselines from history (they
     drift only over days). Computes once immediately, then every `interval`."""
     global _tod_baselines
@@ -313,7 +313,8 @@ def _tod_loop(db, days, min_samples, interval=1800):
     while True:
         start = time.time()
         try:
-            tod = store.hourly_baselines(db, signals, days=days, min_samples=min_samples)
+            tod = store.hourly_baselines(db, signals, days=days,
+                                         min_samples=min_samples, min_days=min_days)
             with _lock:
                 _tod_baselines = tod
         except Exception as e:
@@ -404,6 +405,9 @@ def main():
     ap.add_argument("--tod-min-samples", type=int, default=60,
                     help="min samples in an hour bucket before it overrides the "
                          "rolling window for that signal/hour")
+    ap.add_argument("--tod-min-days", type=int, default=2,
+                    help="min distinct days an hour bucket must span (guards a "
+                         "live surge from polluting its own thin-history baseline)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8888)
     ap.add_argument("--db", default=os.path.join(HERE, "data", "monitor.db"),
@@ -433,7 +437,8 @@ def main():
                          daemon=True).start()
     if args.tod_days > 0:
         threading.Thread(target=_tod_loop,
-                         args=(args.db, args.tod_days, args.tod_min_samples),
+                         args=(args.db, args.tod_days, args.tod_min_samples,
+                               args.tod_min_days),
                          daemon=True).start()
 
     if endpoints == [sources.PUBLIC_RPC]:
