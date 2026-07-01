@@ -617,7 +617,7 @@ function render(j){
   // recommended action (same synthesis the /api/surge backoff signal uses)
   const adv=j.advise, av=document.getElementById('advice');
   if(av){
-    if(!adv){av.className='advice';}
+    if(!adv){av.className='advice';av.innerHTML='';av.style.cssText='';}
     else{
       const AC={normal:'#14f195',caution:'#3fc8ff',backoff:'#f2a93b',critical:'#ff4d6d'};
       const c2=AC[adv.level]||'var(--mut)';

@@ -6,8 +6,9 @@ from . import _helper  # noqa: F401
 import server
 
 
-def _rpc(rate_limited=0.0, p99=None):
-    return [{"active": True, "rate_limited": rate_limited, "lat_p99_ms": p99}]
+def _rpc(rate_limited=0.0, p99=None, samples=100):
+    return [{"active": True, "rate_limited": rate_limited,
+             "lat_p99_ms": p99, "samples": samples}]
 
 
 class BackoffAdviceTest(unittest.TestCase):
@@ -29,10 +30,18 @@ class BackoffAdviceTest(unittest.TestCase):
         # our own primary being throttled forces backoff regardless of surge
         a = server._backoff_advice(
             {"surge_score": 4, "surge_level": "CALM", "skip_rate": 0.05},
-            _rpc(rate_limited=0.10))
+            _rpc(rate_limited=0.25))
         self.assertTrue(a["advise_backoff"])
         self.assertEqual(a["level"], "critical")
         self.assertIn("rate-limited", a["reason"])
+
+    def test_thin_sample_rpc_is_ignored(self):
+        # 50% 429 on only 3 recent calls must NOT escalate (small-sample guard)
+        a = server._backoff_advice(
+            {"surge_score": 4, "surge_level": "CALM", "skip_rate": 0.05},
+            _rpc(rate_limited=0.5, samples=3))
+        self.assertFalse(a["advise_backoff"])
+        self.assertEqual(a["level"], "normal")
 
     def test_skip_rate_drives(self):
         a = server._backoff_advice(
