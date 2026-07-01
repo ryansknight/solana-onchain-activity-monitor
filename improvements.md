@@ -24,17 +24,16 @@ Status legend: ✅ shipped · 🚧 in progress · ⏭️ next · 📋 backlog
 
 ## A. New data sources & signals  (anchor the index to real landing conditions)
 
-### A1. Block-level data via `getBlock`  🚧 (DOING FIRST)
-Sample a recent block every few seconds; from its landed txs derive:
-- **Block fill %** = Σ `computeUnitsConsumed` ÷ per-block CU limit (~48M — VERIFY
-  current value against the node). The *direct* congestion measure.
-- **Fee-per-CU of landed txs** (p50/p90) = the real market-clearing price to land
-  (better than the Jito tip floor for non-bundle sends).
-- **Network-wide tx failure rate** = `meta.err` ÷ total. Spikes when bots spam.
-Why: turns the Surge Index from a proxy into something grounded in what actually
-landed. Cost: `getBlock` is heavy → sample sparingly (1 block / few s), throttle
-to stay inside the ~16-calls/5s budget. Becomes the ground-truth anchor for A/B
-algo work below.
+### A1. Block-level data via `getBlock`  ✅ shipped
+`sources.block_stats` pools the last N blocks (`--block-samples`, default 3) into:
+- **Block fill %** = Σ `computeUnitsConsumed` ÷ 48M CU (verify the constant if a
+  SIMD raises it) — folded into the index (w15).
+- **Non-vote tx failure rate** — folded into the index (w12).
+- **Landed fee-per-CU** (p50/p90) — displayed; kept OUT of the index (overlaps the
+  cheaper, better-sampled `fee_p90`).
+Its own RpcPool + slow cadence + TTL so the ~6 MB×samples fetch can't flap the
+surge loop. The ground-truth anchor for the algo work (B1–B3). (Idea if we want
+it cheaper: only `getBlock` for fill; keep failure/fee from the cheap sources.)
 
 ### A2. Leader-schedule risk  📋
 Combine `getLeaderSchedule` with per-leader skip rates (already derivable from the
