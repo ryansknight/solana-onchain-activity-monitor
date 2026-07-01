@@ -64,10 +64,17 @@ prior until the window fills. See monitor.py `_heat`/`center_scale`, NOTES §6.
 sustained surge >window drifts the median up and latches — partly shared with the
 old median-baseline code). Fine for the common *sudden* meme spike (window is
 still pre-spike → high heat); weaker for slow ramps.
-**Follow-up (B1b):** bucket the baseline by **time-of-day / multi-day** ("unusual
-for this hour") — a cheap SQL `GROUP BY` on the SQLite history. This is the real
-fix for the ramp/latching limit above (compare against days-ago normal, not the
-last 10 min), and worth doing once a few weeks of data accrue.
+**B1b — time-of-day baseline: ✅ shipped.** `store.hourly_baselines` builds each
+signal's per-UTC-hour robust (center, sigma) from history; `server._tod_loop`
+refreshes it ~half-hourly and the surge loop passes the current hour's slice to
+`compute()`, so heat is "unusual FOR THIS HOUR." Falls back per signal/hour to the
+rolling window until a bucket has `--tod-min-samples` AND spans `--tod-min-days`
+distinct days (default 2) — the day-span guard is what stops a *live* surge from
+polluting its own thin-history baseline (so B1b activates only once there's real
+cross-day history; until then it's the proven B1 window). Directly mitigates the
+ramp/latching limit above. `--tod-days` (default 7, 0=off). Gets sharper as more
+history accrues (weekday vs weekend etc.). `comps[...]["source"]` shows `hour` vs
+`window`. Uses its own read connection so the scan never stalls the 5s append.
 
 ### B2. Leading vs current-stress sub-indices  📋
 Split into an "early warning" sub-index (pump-launch acceleration, fee-market slope)

@@ -18,6 +18,7 @@ import csv as _csv
 import glob
 import os
 import sqlite3
+import statistics
 import threading
 import time
 
@@ -140,6 +141,57 @@ def read_scores_since(path, seconds):
         return [(r[0], r[1]) for r in c.execute(
             "SELECT ts, surge_score FROM samples "
             "WHERE ts >= ? AND surge_score IS NOT NULL ORDER BY ts ASC", (cutoff,))]
+
+
+def hourly_baselines(path, signals, days=7, min_samples=60, min_days=2):
+    """Per-signal, per-UTC-hour robust baseline from the trailing `days` of
+    history: {signal: {hour: (center, robust_sigma)}} where center=median and
+    robust_sigma=1.4826*MAD. A bucket is included only when it has >= min_samples
+    points AND spans >= min_days distinct days -- the day span is what stops a
+    live surge from polluting its OWN hour baseline on thin history (median is
+    only robust while today is a minority of the bucket). The per-signal seed
+    floor is applied later in monitor.compute (it needs the seed).
+
+    Uses its OWN read connection (WAL -> concurrent with the surge loop's writes),
+    so the ~day-scale scan never blocks the 5s append on store's shared lock."""
+    signals = list(signals)
+    cutoff = int(time.time() - days * 86400)
+    try:
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        try:
+            rows = c.execute(
+                "SELECT ts, %s FROM samples WHERE ts >= ?" % _quoted(signals),
+                (cutoff,)).fetchall()
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return {}                     # no table yet / unreadable -> all-window
+    buckets = {s: [[] for _ in range(24)] for s in signals}
+    daysets = {s: [set() for _ in range(24)] for s in signals}
+    for r in rows:
+        ts = r["ts"]
+        if ts is None:
+            continue
+        tm = time.gmtime(ts)
+        h, day = tm.tm_hour, (tm.tm_year, tm.tm_yday)
+        for s in signals:
+            v = r[s]
+            if v is not None:
+                buckets[s][h].append(v)
+                daysets[s][h].add(day)
+    out = {}
+    for s in signals:
+        hours = {}
+        for h in range(24):
+            vals = buckets[s][h]
+            if len(vals) >= min_samples and len(daysets[s][h]) >= min_days:
+                center = statistics.median(vals)
+                mad = statistics.median([abs(x - center) for x in vals])
+                hours[h] = (center, 1.4826 * mad)
+        if hours:
+            out[s] = hours
+    return out
 
 
 def import_csvs(path, csv_dir):
