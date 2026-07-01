@@ -52,6 +52,7 @@ def _conn(path):
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")     # concurrent read while writing
         c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA busy_timeout=5000")    # wait out a cross-process writer
         _ensure_schema(c)
         _conns[path] = c
     return c
@@ -123,7 +124,7 @@ def read_recent(path, limit):
     with _lock:
         c = _conn(path)
         rows = c.execute(
-            "SELECT %s FROM samples ORDER BY ts DESC LIMIT %d"
+            "SELECT %s FROM samples WHERE ts IS NOT NULL ORDER BY ts DESC LIMIT %d"
             % (_quoted(cols), int(limit)))
         out = [dict(r) for r in rows]
     out.reverse()
@@ -153,12 +154,15 @@ def import_csvs(path, csv_dir):
             return 0
         total = 0
         for p in sorted(glob.glob(os.path.join(csv_dir, "activity_*.csv"))):
+            # a corrupt legacy CSV (e.g. one truncated by the old rewrite window)
+            # must be skipped, not crash startup -- this runs before any loop's
+            # try/except exists, in both entry points.
             try:
                 with open(p, newline="") as f:
                     batch = [_rowvals(cols, r) for r in _csv.DictReader(f)]
-            except OSError:
-                continue
-            c.executemany(q, batch)
-            total += len(batch)
+                c.executemany(q, batch)
+                total += len(batch)
+            except (OSError, _csv.Error, ValueError) as e:
+                print("[warn] skipping unreadable legacy CSV %s: %s" % (p, e))
         c.commit()
         return total
