@@ -153,7 +153,9 @@ def prune(path, keep_days):
     cutoff = int(time.time() - keep_days * 86400)
     with _lock:
         c = _conn(path)
-        cur = c.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
+        # also drop NULL-ts rows (bad-timestamp imports) -- they're invisible to
+        # every read AND (NULL < cutoff being false) would never otherwise prune
+        cur = c.execute("DELETE FROM samples WHERE ts < ? OR ts IS NULL", (cutoff,))
         c.commit()
         return cur.rowcount
 
@@ -174,6 +176,7 @@ def hourly_baselines(path, signals, days=7, min_samples=60, min_days=2):
     try:
         c = sqlite3.connect(path)
         c.row_factory = sqlite3.Row
+        c.execute("PRAGMA busy_timeout=5000")     # wait out a concurrent writer
         try:
             rows = c.execute(
                 "SELECT ts, %s FROM samples WHERE ts >= ?" % _quoted(signals),

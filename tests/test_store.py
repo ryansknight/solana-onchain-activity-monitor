@@ -91,9 +91,13 @@ class StoreTest(unittest.TestCase):
         store.append(self.db, self._row(iso(now - 100 * 86400), 1))  # 100 days old
         store.append(self.db, self._row(iso(now - 1 * 86400), 2))    # 1 day old
         store.append(self.db, self._row(iso(now), 3))                # now
-        self.assertEqual(store.prune(self.db, keep_days=90), 1)      # only the 100d row
+        store.append(self.db, self._row("bad-timestamp", 7))        # -> ts NULL
+        self.assertEqual(store.prune(self.db, keep_days=90), 2)      # 100d row + NULL-ts
         kept = sorted(r["surge_score"] for r in store.read_recent(self.db, 10))
         self.assertEqual(kept, [2.0, 3.0])                           # recent rows kept
+        null_left = store._conn(self.db).execute(
+            "SELECT COUNT(*) FROM samples WHERE ts IS NULL").fetchone()[0]
+        self.assertEqual(null_left, 0)                              # NULL-ts pruned too
         self.assertEqual(store.prune(self.db, 0), 0)                 # 0 = keep forever
 
     def test_hourly_baselines(self):
