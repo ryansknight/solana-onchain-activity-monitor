@@ -614,9 +614,9 @@ def block_stats(rpc, blocks: int = 3) -> dict:
                 prog_txs[p] = prog_txs.get(p, 0) + 1
     fee_per_cu.sort()
     n = len(got)
-    venue_map = _venue_by_program()
-    venue_top = [{"program": p, "txs": c, "venue": venue_map.get(p)}
-                 for p, c in sorted(prog_txs.items(), key=lambda kv: -kv[1])[:12]]
+    # top program counts for THIS sample -- the server aggregates across samples
+    # into a stable venue_top (this ~1s-of-chain snapshot alone is too noisy)
+    venue_counts = dict(sorted(prog_txs.items(), key=lambda kv: -kv[1])[:40])
 
     def q(p):
         return round(fee_per_cu[min(len(fee_per_cu) - 1, int(p * len(fee_per_cu)))])
@@ -629,7 +629,7 @@ def block_stats(rpc, blocks: int = 3) -> dict:
         "block_txs": total_txs,
         "block_nonvote": nonvote,
         "block_count": n,              # blocks actually aggregated
-        "venue_top": venue_top,        # busiest programs; venue=None => untracked (drift)
+        "venue_counts": venue_counts,  # {program: txs} this sample (server aggregates)
     }
 
 

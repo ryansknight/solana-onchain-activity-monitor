@@ -96,22 +96,22 @@ class BlockStatsTest(unittest.TestCase):
         r = sources.block_stats("u", blocks=1)
         self.assertEqual(r["block_slot"], 999)
 
-    def test_venue_top_tallies_and_flags_drift(self):
+    def test_venue_counts_tally_excludes_vote_and_infra(self):
         pump = sources.HOT_VENUES["pump.fun"]
         newdex = "NewMemeDex1111111111111111111111111111111111"
         blk = {"transactions": [
             tx(100000, 5000, program=pump),        # tracked venue x2
             tx(100000, 5000, program=pump),
-            tx(100000, 5000, program=newdex),      # untracked (drift candidate)
+            tx(100000, 5000, program=newdex),      # untracked
             tx(2100, 5000, vote=True),             # vote -> not tallied
             tx(100000, 5000, program="ComputeBudget111111111111111111111111111111"),  # infra
         ]}
         self._patch({1000: blk})
-        top = {v["program"]: v for v in sources.block_stats("u", blocks=1)["venue_top"]}
-        self.assertEqual(top[pump]["txs"], 2)
-        self.assertEqual(top[pump]["venue"], "pump.fun")       # tracked -> named
-        self.assertIsNone(top[newdex]["venue"])                # untracked -> None (drift)
-        self.assertNotIn("ComputeBudget111111111111111111111111111111", top)  # infra excluded
+        vc = sources.block_stats("u", blocks=1)["venue_counts"]
+        self.assertEqual(vc[pump], 2)                          # counted per program
+        self.assertEqual(vc[newdex], 1)
+        self.assertNotIn(VOTE, vc)                             # vote excluded
+        self.assertNotIn("ComputeBudget111111111111111111111111111111", vc)  # infra excluded
 
     def test_all_skipped_returns_empty(self):
         self._patch({})                                        # every getBlock raises
