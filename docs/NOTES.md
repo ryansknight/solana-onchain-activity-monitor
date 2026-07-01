@@ -95,6 +95,12 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   *own* path's health — distinct from the venue fail rate (the network's) — and
   the earliest throttle warning. Only the *active* node accrues samples (others
   show n=0 until a failover routes calls to them).
+- **Backoff advice (C3/C6):** `server._backoff_advice` folds surge + RPC self-health
+  (429/latency) + skip rate into one verdict via **max-of-signals** (any axis in
+  danger -> back off; `reason` names the driver). Machine-readable at `/api/surge`
+  (`advise_backoff`, `throttle_factor` 0-1, `level`, `action`) for a lander to poll
+  and auto-throttle; the same object drives the dashboard's "recommended action"
+  line. Thresholds are a prior (calibrate via C5).
 
 ### RPC failover (`sources.RpcPool`)
 

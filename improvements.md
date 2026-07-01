@@ -104,9 +104,15 @@ App errors (`RpcAppError`) are recorded but not counted as node errors.
 **Follow-up:** feed rising latency / 429 into alerting (C1) and the backoff
 signal (C3).
 
-### C3. Machine-readable backoff signal  📋
-`advise_backoff` boolean (or `/api/surge`) the lander polls to auto-throttle.
-Promotes the tool from "warn the human" to "automatically protect the lander."
+### C3. Machine-readable backoff signal  ✅ shipped (with C6)
+`server._backoff_advice` synthesizes surge + our own RPC health (C2: 429/latency)
++ skip rate into one verdict via max-of-signals (any axis says danger -> back off,
+and the `reason` says which). Exposed as a tiny `/api/surge` endpoint the lander
+polls -- `advise_backoff` (bool), `throttle_factor` (0-1 = fraction of NON-critical
+sends to hold), `level`, `reason`, `action` -- and embedded in `/api/data`
+`advise`. Turns "warn the human" into "protect the lander." Also drives **C6** (the
+human "recommended action" line on the dashboard, colored by level). Thresholds
+are a prior; calibrate with C5. Follow-up: feed it into alerting (C1).
 
 ### C4. Responsive / mobile  ⏭️ (NEXT after A1)
 `@media` breakpoints: stack the fixed-300px gauge + verdict, handle the 9-column
@@ -117,9 +123,10 @@ is the core use. Pure CSS, zero-dep. (Visual change — needs a real-device eyeb
 Let an operator mark a real rate-limit incident ("throttled at 14:32") and overlay
 it on the surge chart → tune thresholds against ground truth. Feeds B3.
 
-### C6. "Recommended action" line  📋
-Synthesize state into one directive: "Surging — hold non-critical sends, bump tips
-to p95." Human-readable sibling of C3, extends "tip to land now."
+### C6. "Recommended action" line  ✅ shipped (with C3)
+The dashboard now shows a single directive under the verdict ("Hold non-critical
+sends; raise tips to ~p95 · surge ELEVATED (40) · hold ~50%"), colored by level,
+driven by the same `_backoff_advice` synthesis as C3's `/api/surge`.
 
 ### C7. Per-source health / staleness  📋
 Mark when GeckoTerminal / Jito / CoinGecko / pump stream goes stale or errors, so

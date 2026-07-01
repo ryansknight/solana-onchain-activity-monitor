@@ -86,6 +86,10 @@
   .vdrivers{font-size:13px;color:var(--tx);margin-top:10px;line-height:1.55}
   .vdrivers .lbl{color:var(--mut)}
   .vctx{font-size:12px;color:var(--mut);margin-top:11px;line-height:1.5}
+  .advice{margin-top:12px;padding:9px 12px;border-radius:9px;font-size:13px;
+    font-weight:600;border:1px solid var(--line);display:none}
+  .advice.show{display:block}
+  .advice .why{font-weight:400;color:var(--mut);font-size:12px}
   .vctx b{font-family:var(--mono);font-weight:700}
   .jrec{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
     font-size:12px;color:var(--mut);margin:0 0 14px}
@@ -217,6 +221,7 @@
         <div class="vsub" id="vsub">gathering data…</div>
         <div class="vdrivers" id="vdrivers"></div>
         <div class="vctx" id="vctx"></div>
+        <div class="advice" id="advice"></div>
       </div>
     </div>
     <canvas id="hero-chart"></canvas>
@@ -607,6 +612,19 @@ function render(j){
           +`<span style="color:var(--mut)">· typical ${Math.round(ctx.p50)}</span>`
         : `Higher than <b style="color:${col}">${ctx.percentile}%</b> of the ${win} `
           +`<span style="color:var(--mut)">· typical ${Math.round(ctx.p50)} · peak ${Math.round(ctx.max)}</span>`;
+    }
+  }
+  // recommended action (same synthesis the /api/surge backoff signal uses)
+  const adv=j.advise, av=document.getElementById('advice');
+  if(av){
+    if(!adv){av.className='advice';}
+    else{
+      const AC={normal:'#14f195',caution:'#3fc8ff',backoff:'#f2a93b',critical:'#ff4d6d'};
+      const c2=AC[adv.level]||'var(--mut)';
+      av.className='advice show';
+      av.style.borderColor=c2; av.style.color=c2;
+      av.innerHTML=`${adv.action} <span class="why">· ${adv.reason}`
+        +(adv.advise_backoff?` · hold ~${Math.round(adv.throttle_factor*100)}%`:'')+`</span>`;
     }
   }
   // what's driving the surge: signals elevated above baseline + busiest venues
