@@ -53,6 +53,7 @@ _state = {
     "block_at": None,
     "interval": 30,
     "movers_interval": 15,
+    "block_interval": 30,
     "latest": {},
     "components": {},
     "meme_by_program": {},
@@ -355,23 +356,28 @@ def _tod_loop(db, days, min_samples, min_days, interval=1800):
 _RPC_MIN_SAMPLES = 20   # recent calls before the RPC 429/latency axes are trusted
 
 
-# (last-update state key, display name, expected cadence seconds). status is
-# fresh < 3x cadence, stale < 6x, else down -- so an operator can tell a frozen
-# last-known-good value from a live one.
+# (last-good state key, display name, snapshot key holding the configured cadence
+# or None, default cadence seconds). status is fresh < 3x cadence, stale < 6x, else
+# down -- so an operator can tell a frozen last-known-good value from a live one.
+# "Surge loop" tracks the tick heartbeat (updated_at bumps only on a non-raising
+# tick); the RPC data-QUALITY view is the separate RPC-health panel (C2).
 _SOURCES = [
-    ("updated_at", "RPC / surge", 5),
-    ("jito_at", "Jito tips", 10),
-    ("movers_updated_at", "Movers (Gecko)", 15),
-    ("block_at", "Block data", 30),
-    ("sol_at", "SOL price", 45),
+    ("updated_at", "Surge loop", "interval", 5),
+    ("jito_at", "Jito tips", None, 10),
+    ("movers_updated_at", "Movers (Gecko)", "movers_interval", 15),
+    ("block_at", "Block data", "block_interval", 30),
+    ("sol_at", "SOL price", None, 45),
 ]
 
 
 def _source_health(snap, pump_connected):
     """Per-source freshness so a stale/down feed is visible, not silently frozen."""
-    now = time.time()
+    now = snap.get("server_time") or time.time()
     out = []
-    for key, name, cadence in _SOURCES:
+    for key, name, cad_key, default in _SOURCES:
+        cadence = snap.get(cad_key, default) if cad_key else default
+        if not cadence or cadence <= 0:            # source disabled -> omit
+            continue
         at = snap.get(key)
         if not at:
             out.append({"name": name, "age_s": None, "status": "waiting"})
@@ -458,6 +464,7 @@ def _snapshot():
             "server_time": time.time(),
             "interval": _state["interval"],
             "movers_interval": _state["movers_interval"],
+            "block_interval": _state["block_interval"],
             "latest": latest,
             "components": _state["components"],
             "meme_by_program": _state["meme_by_program"],
@@ -587,6 +594,7 @@ def main():
 
     _state["interval"] = args.interval
     _state["movers_interval"] = args.movers_interval
+    _state["block_interval"] = args.block_interval
     threading.Thread(target=_surge_loop,
                      args=(rpc, args.interval, args.db, args.retention_days),
                      daemon=True).start()

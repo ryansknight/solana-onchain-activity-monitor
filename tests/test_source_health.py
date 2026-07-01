@@ -18,7 +18,7 @@ class SourceHealthTest(unittest.TestCase):
             "sol_at": now - 100,            # SOL cadence 45 -> fresh (<135)
         }
         h = {s["name"]: s for s in server._source_health(snap, pump_connected=True)}
-        self.assertEqual(h["RPC / surge"]["status"], "fresh")
+        self.assertEqual(h["Surge loop"]["status"], "fresh")
         self.assertEqual(h["Jito tips"]["status"], "stale")
         self.assertEqual(h["Movers (Gecko)"]["status"], "down")
         self.assertEqual(h["Block data"]["status"], "waiting")
@@ -29,7 +29,20 @@ class SourceHealthTest(unittest.TestCase):
     def test_pump_and_empty(self):
         h = {s["name"]: s for s in server._source_health({}, pump_connected=False)}
         self.assertEqual(h["pump.fun stream"]["status"], "down")   # not connected
-        self.assertEqual(h["RPC / surge"]["status"], "waiting")    # no timestamp yet
+        self.assertEqual(h["Surge loop"]["status"], "waiting")     # no timestamp yet
+
+    def test_cadence_from_configured_interval(self):
+        # with --interval 30 the loop bumps updated_at ~every 30s; a 30s age must
+        # still read fresh (cadence follows the config, not a hardcoded 5)
+        now = time.time()
+        h = {s["name"]: s for s in server._source_health(
+            {"interval": 30, "updated_at": now - 30}, pump_connected=True)}
+        self.assertEqual(h["Surge loop"]["status"], "fresh")       # 30 < 3*30=90
+
+    def test_disabled_source_omitted(self):
+        h = {s["name"]: s for s in server._source_health(
+            {"block_interval": 0}, pump_connected=True)}
+        self.assertNotIn("Block data", h)                          # block sampling off
 
 
 if __name__ == "__main__":

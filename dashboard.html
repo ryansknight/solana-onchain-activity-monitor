@@ -781,9 +781,11 @@ function render(j){
     const SC={fresh:'#14f195',stale:'#f2a93b',down:'#ff4d6d',waiting:'var(--mut)'};
     sh.className='srcs';
     sh.innerHTML=(j.sources||[]).map(s=>{
-      const age=s.age_s==null?(s.status==='fresh'?'live':s.status):agoStr(s.age_s);
+      // fresh -> age (or "live" if ageless, e.g. pump); stale/down -> "status · age"
+      const label=s.age_s==null?(s.status==='fresh'?'live':s.status)
+        :(s.status==='fresh'?agoStr(s.age_s):`${s.status} · ${agoStr(s.age_s)}`);
       return `<span class="srcpill"><span class="dot" style="background:${SC[s.status]||'var(--mut)'}"></span>`
-        +`${s.name} <span class="sa">${s.status==='fresh'?age:s.status}</span></span>`;
+        +`${s.name} <span class="sa">${label}</span></span>`;
     }).join('');
   }
   // pump.fun stream health -> folded into the Launches/min card (in details)
