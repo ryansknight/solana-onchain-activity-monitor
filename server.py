@@ -284,17 +284,18 @@ def _movers_loop(interval):
         time.sleep(max(1.0, interval - (time.time() - start)))
 
 
-def _block_loop(rpc, interval):
-    """Slow loop: one recent block per `interval` for direct landing conditions
-    (fill / non-vote failure rate / landed fee-per-CU). getBlock is heavy (~6 MB,
-    no gzip), so this runs on its own thread off the surge tick; the surge loop
-    injects the last-known-good into each row. Preserves last value on a miss."""
+def _block_loop(rpc, interval, samples):
+    """Slow loop: aggregate the last `samples` blocks per `interval` for direct
+    landing conditions (fill / non-vote failure rate / landed fee-per-CU). getBlock
+    is heavy (~6 MB each, no gzip), so this runs on its own thread off the surge
+    tick; the surge loop injects the last-known-good into each row. Preserves the
+    last value on a miss."""
     global _block_latest
     misses = 0
     while True:
         start = time.time()
         try:
-            b = sources.block_stats(rpc)
+            b = sources.block_stats(rpc, blocks=samples)
         except Exception as e:
             print(f"[warn] block tick failed: {e}")
             b = None
@@ -390,6 +391,9 @@ def main():
     ap.add_argument("--block-interval", type=int, default=30,
                     help="recent-block sampling seconds (getBlock is ~6 MB each, "
                          "so this is a slow loop; 0 disables block-level signals)")
+    ap.add_argument("--block-samples", type=int, default=3,
+                    help="blocks aggregated per sample (more = less noise, more "
+                         "bandwidth: ~6 MB x this, per --block-interval)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8888)
     ap.add_argument("--csv-dir", default=os.path.join(HERE, "data"))
@@ -409,7 +413,8 @@ def main():
         # loop's primary and flap the fast tick to a fallback
         block_rpc = sources.build_pool(args.rpc)[0]
         threading.Thread(target=_block_loop,
-                         args=(block_rpc, args.block_interval), daemon=True).start()
+                         args=(block_rpc, args.block_interval, args.block_samples),
+                         daemon=True).start()
 
     if endpoints == [sources.PUBLIC_RPC]:
         print("WARNING: no SOLANA_RPC configured -- using the public endpoint, "
@@ -420,7 +425,8 @@ def main():
     print(f"dashboard: http://{args.host}:{args.port}")
     print(f"RPC pool ({len(endpoints)}): "
           f"{', '.join(sources._node_label(e) for e in endpoints)}")
-    blk = (f"block every {args.block_interval}s (~6 MB/sample)"
+    blk = (f"block every {args.block_interval}s "
+           f"({args.block_samples}x~6 MB/sample)"
            if args.block_interval > 0 else "block sampling off")
     print(f"surge every {args.interval}s · movers every {args.movers_interval}s · "
           f"{blk} — open the URL in a browser")
