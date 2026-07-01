@@ -70,7 +70,7 @@
   .subtitle{font-size:13px;color:var(--mut);margin-top:3px;max-width:640px}
   .hero-body{display:flex;gap:30px;align-items:center;margin-top:14px;flex-wrap:wrap}
   .gauge-wrap{position:relative;width:300px;flex:none}
-  .gauge-wrap canvas{width:300px;height:165px;display:block}
+  .gauge-wrap canvas{width:100%;aspect-ratio:300/165;display:block}
   .gauge-center{position:absolute;left:0;right:0;bottom:48px;text-align:center;pointer-events:none}
   .g-num{font-size:46px;font-weight:800;line-height:.9;transform-origin:center;transition:color .5s ease}
   @keyframes gpulse{0%{transform:scale(1)}35%{transform:scale(1.13)}100%{transform:scale(1)}}
@@ -145,6 +145,34 @@
   .venue .vbar{height:16px;background:#0b0a12;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
   .venue .vfill{height:100%;background:var(--blue);border-radius:5px}
   .venue .vmeta{font-size:12px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
+
+  /* ---- mobile (tailnet has phones; glanceability anywhere is the point) ---- */
+  @media (max-width:720px){
+    .wrap{padding:14px}
+    header{padding:12px 16px}
+    .hero{padding:16px 16px 20px}
+    .panel,details summary{padding-left:15px;padding-right:15px}
+    .details-body{padding-left:15px;padding-right:15px}
+    /* gauge + verdict stack (force column — don't rely on flex-wrap math, which
+       leaves verdict a sliver beside the rigid gauge on ~374-720px phones) */
+    .hero-body{flex-direction:column;gap:14px}
+    .gauge-wrap{width:100%;max-width:300px;margin:0 auto}
+    .verdict{min-width:0;width:100%}
+    .vhead{font-size:24px}
+    .jstat{min-width:calc(50% - 7px)}          /* tips: 2-up instead of 4-up */
+    .driver{grid-template-columns:92px 1fr 40px} /* narrower label column */
+    /* surging-coins table: drop secondary columns so the essentials fit a phone.
+       keep # · Token · Age · 1h · Surge; hide Price · Mkt cap · 5m · Vol 1h */
+    table th:nth-child(4),table td:nth-child(4),
+    table th:nth-child(5),table td:nth-child(5),
+    table th:nth-child(6),table td:nth-child(6),
+    table th:nth-child(8),table td:nth-child(8){display:none}
+    th,td{padding:8px 6px}
+  }
+  @media (max-width:380px){
+    .g-num{font-size:40px}
+    .vhead{font-size:21px}
+  }
 </style>
 </head>
 <body>
