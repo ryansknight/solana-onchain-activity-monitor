@@ -1,7 +1,9 @@
 """RpcPool: failover on transport errors, NO failover on app errors, cooldown
 skip, self-healing failback, all-down propagation."""
+import io
 import time
 import unittest
+import urllib.error
 
 from . import _helper  # noqa: F401  (sys.path setup)
 import sources
@@ -20,6 +22,10 @@ class RpcPoolTest(unittest.TestCase):
             m = self.mode.get(name, "ok")
             if m == "app":
                 raise sources.RpcAppError("bad params")
+            if m == "429":
+                raise urllib.error.HTTPError(url, 429, "rate", {}, io.BytesIO(b""))
+            if m == "ratelimit":
+                raise sources.RpcRateLimit("rate exceeded")   # JSON-body 429
             if m == "transport":
                 raise ConnectionError("node down")
             return "ok-" + name
@@ -79,6 +85,43 @@ class RpcPoolTest(unittest.TestCase):
             p.call("m")
         self.assertEqual(self.calls, ["A", "B", "C"])      # tried every endpoint
 
+    def test_health_metrics_recorded(self):
+        p = sources.RpcPool([self.urls["A"]])     # single node: 429/err raise
+        p.BASE_COOLDOWN = 0.0
+        for _ in range(4):
+            p.call("m")                            # 4 ok -> latency samples
+        self.mode["A"] = "429"
+        with self.assertRaises(urllib.error.HTTPError):
+            p.call("m")                            # 1 rate-limited
+        self.mode["A"] = "transport"
+        with self.assertRaises(ConnectionError):
+            p.call("m")                            # 1 error
+        s = p.status()[0]
+        self.assertEqual(s["samples"], 6)
+        self.assertIsNotNone(s["lat_p50_ms"])      # from the 4 ok calls
+        self.assertIsNotNone(s["lat_p99_ms"])
+        self.assertAlmostEqual(s["rate_limited"], 1 / 6, places=3)  # the 429
+        self.assertAlmostEqual(s["err_rate"], 1 / 6, places=3)      # the transport err
+
+    def test_app_error_not_counted_as_node_error(self):
+        p = sources.RpcPool([self.urls["A"]])
+        p.call("m")                                # 1 ok
+        self.mode["A"] = "app"
+        with self.assertRaises(sources.RpcAppError):
+            p.call("m")                            # recorded, but not err/429
+        s = p.status()[0]
+        self.assertEqual(s["samples"], 1)          # app call excluded from denom
+        self.assertEqual(s["err_rate"], 0.0)       # app error != node error
+        self.assertEqual(s["rate_limited"], 0.0)
+
+    def test_ratelimit_fails_over_and_counts(self):
+        self.mode["A"] = "ratelimit"               # JSON-body 429 on the primary
+        p = self._pool()
+        self.assertEqual(p.call("m"), "ok-B")      # rate-limit DOES fail over
+        self.assertEqual(self.calls, ["A", "B"])
+        self.assertFalse(p.status()[0]["healthy"])  # A cooled
+        self.assertEqual(p.status()[0]["rate_limited"], 1.0)  # and counted
+
     def test_single_endpoint_string_bypasses_pool(self):
         # rpc_call with a plain URL string dispatches straight to _rpc_call_one
         self.assertEqual(sources.rpc_call(self.urls["A"], "m"), "ok-A")
@@ -108,6 +151,38 @@ class RpcPoolTest(unittest.TestCase):
         # the guard must NOT bump the streak for a same-window failure -> stays ~1s,
         # not escalated to ~2s
         self.assertLessEqual(p.status()[0]["cooldown_s"], 1)
+
+
+class RpcCallClassifyTest(unittest.TestCase):
+    """_rpc_call_one classifies a JSON error body as rate-limit vs app error."""
+
+    def setUp(self):
+        self._orig = sources._http
+
+    def tearDown(self):
+        sources._http = self._orig
+
+    def _resp(self, d):
+        sources._http = lambda req, timeout=20: d
+
+    def test_ratelimit_by_code(self):
+        self._resp({"error": {"code": 429, "message": "slow down"}})
+        with self.assertRaises(sources.RpcRateLimit):
+            sources._rpc_call_one("https://x/y", "getSlot")
+
+    def test_ratelimit_by_message(self):
+        self._resp({"error": {"code": -32000, "message": "Too Many Requests"}})
+        with self.assertRaises(sources.RpcRateLimit):
+            sources._rpc_call_one("https://x/y", "getSlot")
+
+    def test_plain_app_error(self):
+        self._resp({"error": {"code": -32602, "message": "invalid params"}})
+        with self.assertRaises(sources.RpcAppError):
+            sources._rpc_call_one("https://x/y", "getSlot")
+
+    def test_ok_result(self):
+        self._resp({"result": 42})
+        self.assertEqual(sources._rpc_call_one("https://x/y", "getSlot"), 42)
 
 
 if __name__ == "__main__":
