@@ -71,7 +71,7 @@
   .hero-body{display:flex;gap:30px;align-items:center;margin-top:14px;flex-wrap:wrap}
   .gauge-wrap{position:relative;width:300px;flex:none}
   .gauge-wrap canvas{width:100%;aspect-ratio:300/165;display:block}
-  .gauge-center{position:absolute;left:0;right:0;bottom:29%;text-align:center;pointer-events:none}
+  .gauge-center{position:absolute;left:0;right:0;bottom:48px;text-align:center;pointer-events:none}
   .g-num{font-size:46px;font-weight:800;line-height:.9;transform-origin:center;transition:color .5s ease}
   @keyframes gpulse{0%{transform:scale(1)}35%{transform:scale(1.13)}100%{transform:scale(1)}}
   .gpulse{animation:gpulse .55s ease}
@@ -153,8 +153,9 @@
     .hero{padding:16px 16px 20px}
     .panel,details summary{padding-left:15px;padding-right:15px}
     .details-body{padding-left:15px;padding-right:15px}
-    /* gauge + verdict stack; gauge centers and never overflows */
-    .hero-body{gap:14px}
+    /* gauge + verdict stack (force column — don't rely on flex-wrap math, which
+       leaves verdict a sliver beside the rigid gauge on ~374-720px phones) */
+    .hero-body{flex-direction:column;gap:14px}
     .gauge-wrap{width:100%;max-width:300px;margin:0 auto}
     .verdict{min-width:0;width:100%}
     .vhead{font-size:24px}
