@@ -54,15 +54,30 @@ CSV_FIELDS = [
 # --------------------------------------------------------------------------- #
 # Composite Surge Index
 # --------------------------------------------------------------------------- #
-# One tracked 0-100 number combining every signal. Each signal is measured as
-# how far ABOVE its own recent baseline it sits ("heat", 0-100), then the heats
-# are weighted-averaged. Weights lean toward what predicts lander rate-limit
-# pain: meme-venue submission load and the failure rate (bots racing and losing)
-# dominate, network load and landing-fee pressure next, launch rate as a leading
-# hint. The weights are a reasoned prior, not yet calibrated to real rate-limit
-# events -- tune SURGE_SIGNALS / _LEVELS once a real surge has been observed.
+# One tracked 0-100 number combining every signal. Each signal's "heat" (0-100)
+# is how many ROBUST sigmas above its own rolling baseline it sits (median center,
+# MAD spread -- see _heat / center_scale), so the index self-calibrates per signal
+# and is variance-aware rather than keyed to a fixed multiple of the median. The
+# heats are then weighted-averaged. Weights lean toward what predicts lander
+# rate-limit pain: meme-venue submission load and the failure rate (bots racing
+# and losing) dominate, network load and landing-fee pressure next, launch rate as
+# a leading hint. Weights/thresholds are a reasoned prior, not yet calibrated to
+# real rate-limit events -- tune SURGE_SIGNALS / _LEVELS once a surge is observed.
+# The seed baseline is only the prior until each signal's rolling window fills.
 MIN_HISTORY = 8            # samples before a signal's rolling baseline kicks in
-BASELINE_WINDOW = 120      # samples kept for the rolling median (~1h at 30s)
+BASELINE_WINDOW = 120      # samples kept for the rolling median (~10 min at 5s)
+
+# Self-calibrating normalization: each signal's heat is how many ROBUST sigmas it
+# sits above its own rolling baseline (median center, MAD spread), not a fixed
+# multiple of the median. This is variance-aware -- a normally-steady signal lights
+# up on a small move, a normally-volatile one needs a bigger move -- and robust to
+# the heavy tails of on-chain data (median/MAD resist spikes; mean/std wouldn't).
+_Z_FULL = 3.0              # robust-sigmas above baseline that map to heat 100
+_SCALE_FLOOR_FRAC = 0.05   # floor the sigma at 5% of |baseline| so a near-constant
+                           # signal isn't hair-triggered (without erasing the
+                           # variance-awareness for genuinely steady signals)
+_SEED_SCALE_FRAC = 0.5     # wide prior spread until the rolling window fills
+_EPS = 1e-9
 
 # (row key, weight, seed baseline used until history accumulates)
 SURGE_SIGNALS = [
@@ -91,11 +106,13 @@ SIGNAL_LABELS = {
 _LEVELS = [(60, "SURGE"), (38, "ELEVATED"), (18, "BUSY"), (0, "CALM")]
 
 
-def _heat(value, baseline) -> float:
-    """How far above baseline a signal sits, 0-100. 1x->0, 2x->50, 3x+->100."""
-    if value is None or not baseline or baseline <= 0:
+def _heat(value, center, scale) -> float:
+    """Heat 0-100 = how many robust sigmas ABOVE its baseline the signal sits
+    (0 sigma -> 0, _Z_FULL sigma -> 100). Only upward deviations count."""
+    if value is None or not scale or scale <= 0:
         return 0.0
-    return max(0.0, min(100.0, (value / baseline - 1.0) * 50.0))
+    z = (value - center) / scale
+    return max(0.0, min(100.0, z / _Z_FULL * 100.0))
 
 
 def level_for(index: int) -> str:
@@ -108,9 +125,17 @@ class SurgeTracker:
     def __init__(self):
         self.hist = {k: deque(maxlen=BASELINE_WINDOW) for k, _, _ in SURGE_SIGNALS}
 
-    def baseline(self, key, seed):
+    def center_scale(self, key, seed):
+        """Rolling (center, scale) for a signal: median + robust sigma
+        (1.4826*MAD, floored). Until the window fills, a wide prior around the
+        seed baseline so a fresh install isn't hair-triggered."""
         d = self.hist[key]
-        return statistics.median(d) if len(d) >= MIN_HISTORY else seed
+        if len(d) < MIN_HISTORY:
+            return seed, max(_SEED_SCALE_FRAC * abs(seed), _EPS)
+        center = statistics.median(d)
+        mad = statistics.median([abs(x - center) for x in d])
+        scale = max(1.4826 * mad, _SCALE_FLOOR_FRAC * abs(center), _EPS)
+        return center, scale
 
     def warming(self) -> bool:
         return len(self.hist["nonvote_tps"]) < MIN_HISTORY
@@ -140,15 +165,16 @@ class SurgeTracker:
         for key, weight, seed in SURGE_SIGNALS:
             val = row.get(key)
             present = val is not None and val != ""
-            base = self.baseline(key, seed)
-            heat = _heat(val, base)
+            center, scale = self.center_scale(key, seed)
+            heat = _heat(val, center, scale)
             comps[key] = {
                 "label": SIGNAL_LABELS.get(key, key),
                 "heat": round(heat),
                 "weight": weight,
                 "contribution": round(weight * heat / 100.0, 1),
                 "value": val,
-                "baseline": round(base, 3) if base is not None else None,
+                "baseline": round(center, 3),
+                "scale": round(scale, 3),
                 "present": present,
             }
             # a missing signal (e.g. block stats before the first sample, or a

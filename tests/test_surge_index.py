@@ -7,14 +7,26 @@ import monitor
 
 
 class HeatTest(unittest.TestCase):
-    def test_heat_mapping(self):
-        self.assertEqual(monitor._heat(None, 1.0), 0.0)     # missing value
-        self.assertEqual(monitor._heat(10, 0), 0.0)          # zero baseline guarded
-        self.assertEqual(monitor._heat(1.0, 1.0), 0.0)       # 1x baseline -> 0
-        self.assertEqual(monitor._heat(2.0, 1.0), 50.0)      # 2x -> 50
-        self.assertEqual(monitor._heat(3.0, 1.0), 100.0)     # 3x -> 100
-        self.assertEqual(monitor._heat(9.0, 1.0), 100.0)     # capped at 100
-        self.assertEqual(monitor._heat(0.5, 1.0), 0.0)       # below baseline -> 0
+    def test_heat_zscore_mapping(self):
+        # _heat(value, center, scale): robust-sigmas above center -> 0..100
+        self.assertEqual(monitor._heat(None, 1.0, 1.0), 0.0)  # missing value
+        self.assertEqual(monitor._heat(10, 1.0, 0), 0.0)      # zero scale guarded
+        self.assertEqual(monitor._heat(1.0, 1.0, 1.0), 0.0)   # 0 sigma -> 0
+        self.assertEqual(monitor._heat(2.5, 1.0, 1.0), 50.0)  # +1.5 sigma -> 50
+        self.assertEqual(monitor._heat(4.0, 1.0, 1.0), 100.0) # +3 sigma -> 100
+        self.assertEqual(monitor._heat(10.0, 1.0, 1.0), 100.0)  # capped
+        self.assertEqual(monitor._heat(0.5, 1.0, 1.0), 0.0)   # below center -> 0
+
+    def test_variance_aware(self):
+        # same absolute move (+100 over a ~1000 median) is HOT for a normally-steady
+        # signal and MILD for a normally-volatile one -- the point of the upgrade.
+        t = monitor.SurgeTracker()
+        for v in (1000, 1005, 995, 1002, 998, 1001, 999, 1003, 997, 1004):
+            t.update({"nonvote_tps": float(v)})               # low variance
+        for v in (1000, 1500, 500, 1200, 800, 1300, 700, 1100, 900, 1400):
+            t.update({"meme_tps": float(v)})                  # high variance
+        _, _, comps = t.compute({"nonvote_tps": 1100.0, "meme_tps": 1100.0})
+        self.assertGreater(comps["nonvote_tps"]["heat"], comps["meme_tps"]["heat"])
 
 
 class LevelTest(unittest.TestCase):
