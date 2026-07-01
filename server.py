@@ -13,6 +13,8 @@ and redraws.
 Endpoints:
     GET /            -> dashboard.html
     GET /api/data    -> latest snapshot + history + fresh pump rates + movers
+    GET /api/surge   -> tiny backoff verdict for a lander to poll (advise_backoff,
+                        throttle_factor, level, reason, action)
 """
 
 from __future__ import annotations
@@ -322,6 +324,69 @@ def _tod_loop(db, days, min_samples, min_days, interval=1800):
         time.sleep(max(60.0, interval - (time.time() - start)))
 
 
+_RPC_MIN_SAMPLES = 20   # recent calls before the RPC 429/latency axes are trusted
+
+
+def _backoff_advice(latest, rpc):
+    """Synthesize surge + our own RPC health + skip rate into a single actionable
+    verdict -- machine-readable (advise_backoff / throttle_factor, C3) AND human
+    (action, C6). throttle_factor is the suggested fraction of NON-critical sends
+    to hold. Uses max-of-signals: if ANY axis says danger, back off. The reason is
+    whichever axis drives it, so the operator (and the lander) know why."""
+    def clamp(x):
+        return max(0.0, min(1.0, x))
+
+    score = latest.get("surge_score")
+    level = latest.get("surge_level") or "CALM"
+    skip = latest.get("skip_rate")
+    active = next((e for e in rpc if e.get("active")), None) or {}
+    r429 = active.get("rate_limited") or 0.0
+    p99 = active.get("lat_p99_ms")
+    rpc_samples = active.get("samples") or 0
+
+    subs = []
+    if score is not None:
+        subs.append((clamp(score / 80.0), f"surge {level} ({int(score)})"))
+    # the RPC axes need enough recent calls to be trustworthy -- a thin window
+    # right after a failover must not escalate a lander to backoff on one blip
+    if rpc_samples >= _RPC_MIN_SAMPLES:
+        if r429:
+            subs.append((clamp(r429 / 0.20), f"primary RPC rate-limited {round(r429 * 100)}%"))
+        if p99 is not None:
+            subs.append((clamp((p99 - 500) / 2000.0), f"primary RPC p99 {p99} ms"))
+    if skip is not None:
+        subs.append((clamp((skip - 0.05) / 0.15), f"slot skip {round(skip * 100)}%"))
+    factor, reason = max(subs, key=lambda s: s[0]) if subs else (0.0, "no data yet")
+    factor = round(factor, 2)
+
+    if factor >= 0.8:
+        lvl, action = "critical", "Back off hard — essential sends only, top-tier tips."
+    elif factor >= 0.5:
+        lvl, action = "backoff", "Hold non-critical sends; raise tips to ~p95."
+    elif factor >= 0.2:
+        lvl, action = "caution", "Busier than usual — prioritize, consider higher tips."
+    else:
+        lvl, action = "normal", "Landing normally — send freely."
+    return {
+        "advise_backoff": factor >= 0.5,
+        "throttle_factor": factor,
+        "level": lvl,
+        "reason": reason,
+        "action": action,
+        "surge_score": score,
+        "surge_level": level,
+    }
+
+
+def _advice():
+    """Compact backoff verdict for the lightweight /api/surge endpoint (reads only
+    what _backoff_advice needs -- no pump/history work)."""
+    with _lock:
+        latest = dict(_state["latest"])
+        rpc = list(_state["rpc"])
+    return _backoff_advice(latest, rpc)
+
+
 def _snapshot():
     with _lock:
         latest = dict(_state["latest"])
@@ -355,6 +420,7 @@ def _snapshot():
     cols["t"] = [s["t"] for s in hist]
     out["history"] = cols
     out["history24h"] = _downsample(hist24)
+    out["advise"] = _backoff_advice(out["latest"], out.get("rpc") or [])
     return out
 
 
@@ -362,10 +428,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quiet
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, cache=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
 
@@ -378,7 +446,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, b"dashboard.html missing", "text/plain")
         elif self.path.startswith("/api/data"):
             body = json.dumps(_snapshot()).encode()
-            self._send(200, body, "application/json")
+            self._send(200, body, "application/json", cache="no-store")
+        elif self.path.startswith("/api/surge"):
+            # tiny machine-readable verdict for a lander to poll and auto-throttle
+            body = json.dumps(_advice()).encode()
+            self._send(200, body, "application/json", cache="no-store")
         else:
             self._send(404, b"not found", "text/plain")
 
