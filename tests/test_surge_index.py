@@ -18,15 +18,19 @@ class HeatTest(unittest.TestCase):
         self.assertEqual(monitor._heat(0.5, 1.0, 1.0), 0.0)   # below center -> 0
 
     def test_variance_aware(self):
-        # same absolute move (+100 over a ~1000 median) is HOT for a normally-steady
-        # signal and MILD for a normally-volatile one -- the point of the upgrade.
+        # the SAME move (+150 over each ~median) is HOTTER for a steadier signal --
+        # and both signals are driven through the MAD path (scale > the 5%-of-center
+        # floor), so this genuinely exercises the variance mechanism, not the floor.
         t = monitor.SurgeTracker()
-        for v in (1000, 1005, 995, 1002, 998, 1001, 999, 1003, 997, 1004):
-            t.update({"nonvote_tps": float(v)})               # low variance
-        for v in (1000, 1500, 500, 1200, 800, 1300, 700, 1100, 900, 1400):
-            t.update({"meme_tps": float(v)})                  # high variance
-        _, _, comps = t.compute({"nonvote_tps": 1100.0, "meme_tps": 1100.0})
-        self.assertGreater(comps["nonvote_tps"]["heat"], comps["meme_tps"]["heat"])
+        for v in (920, 940, 960, 980, 1000, 1020, 1040, 1060, 1080, 1100):
+            t.update({"nonvote_tps": float(v)})               # moderate spread
+        for v in (600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500):
+            t.update({"meme_tps": float(v)})                  # wide spread
+        _, _, comps = t.compute({"nonvote_tps": 1160.0, "meme_tps": 1200.0})  # ~+150 each
+        a, b = comps["nonvote_tps"], comps["meme_tps"]
+        self.assertGreater(a["scale"], 0.05 * a["baseline"])  # MAD, not the floor
+        self.assertGreater(b["scale"], 0.05 * b["baseline"])
+        self.assertGreater(a["heat"], b["heat"])              # steadier -> hotter
 
 
 class LevelTest(unittest.TestCase):

@@ -127,14 +127,20 @@ class SurgeTracker:
 
     def center_scale(self, key, seed):
         """Rolling (center, scale) for a signal: median + robust sigma
-        (1.4826*MAD, floored). Until the window fills, a wide prior around the
-        seed baseline so a fresh install isn't hair-triggered."""
+        (1.4826*MAD), floored. The floor keys off BOTH the current center and the
+        always-positive seed, so a signal that idles near zero (fee_contention,
+        the fail rates) still keeps a sane minimum spread and can't be
+        hair-triggered by a tiny move. That floor plus update()'s consecutive
+        dedup (which forbids an all-identical, MAD=0 window) together bound
+        sensitivity -- keep both. Until the window fills, a wide prior around the
+        seed so a fresh install isn't hair-triggered."""
         d = self.hist[key]
+        seed_floor = _SCALE_FLOOR_FRAC * abs(seed)
         if len(d) < MIN_HISTORY:
-            return seed, max(_SEED_SCALE_FRAC * abs(seed), _EPS)
+            return seed, max(_SEED_SCALE_FRAC * abs(seed), seed_floor, _EPS)
         center = statistics.median(d)
         mad = statistics.median([abs(x - center) for x in d])
-        scale = max(1.4826 * mad, _SCALE_FLOOR_FRAC * abs(center), _EPS)
+        scale = max(1.4826 * mad, _SCALE_FLOOR_FRAC * abs(center), seed_floor, _EPS)
         return center, scale
 
     def warming(self) -> bool:
