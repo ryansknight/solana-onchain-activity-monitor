@@ -15,6 +15,9 @@ Endpoints:
     GET /api/data    -> latest snapshot + history + fresh pump rates + movers
     GET /api/surge   -> tiny backoff verdict for a lander to poll (advise_backoff,
                         throttle_factor, level, reason, action)
+    POST /api/incident -> mark a real rate-limit/landing incident now (optional
+                        {"note"}); recorded with the current index as calibration
+                        ground truth, and overlaid on the charts
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ _state = {
 }
 _lock = threading.Lock()
 _pump = None
+_db = None            # SQLite path, set in main -- for the snapshot + POST handler
 
 # Last-known-good recent-block stats (block_fill / block_fail_rate / fee-per-CU).
 # getBlock is heavy (~6 MB), so a dedicated slow loop refreshes this and the fast
@@ -429,6 +433,7 @@ def _snapshot():
     out["history"] = cols
     out["history24h"] = _downsample(hist24)
     out["advise"] = _backoff_advice(out["latest"], out.get("rpc") or [])
+    out["incidents"] = store.recent_incidents(_db, 86400) if _db else []
     return out
 
 
@@ -459,6 +464,24 @@ class Handler(BaseHTTPRequestHandler):
             # tiny machine-readable verdict for a lander to poll and auto-throttle
             body = json.dumps(_advice()).encode()
             self._send(200, body, "application/json", cache="no-store")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        # mark a real rate-limit / landing incident (ground truth to calibrate the
+        # index). Tailnet-only tool, so no auth. Body: optional {"note": "..."}.
+        if self.path.startswith("/api/incident"):
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                note = json.loads(raw).get("note") if raw else None
+            except (ValueError, TypeError, json.JSONDecodeError):
+                note = None
+            with _lock:
+                latest = dict(_state["latest"])
+            inc = store.add_incident(_db, note, latest.get("surge_score"),
+                                     latest.get("surge_level"))
+            self._send(200, json.dumps(inc).encode(), "application/json", cache="no-store")
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -497,6 +520,8 @@ def main():
                          "0 = keep forever. Keep well above --tod-days / 7d.")
     args = ap.parse_args()
 
+    global _db
+    _db = args.db
     rpc, endpoints = sources.build_pool(args.rpc)
     _state["rpc"] = rpc.status()
 

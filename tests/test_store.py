@@ -85,6 +85,22 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.import_csvs(self.db, self.dir), 0)     # no-op 2nd time
         self.assertEqual(len(store.read_recent(self.db, 10)), 2)
 
+    def test_incidents_roundtrip(self):
+        inc = store.add_incident(self.db, "  got 429s  ", 45.0, "ELEVATED")
+        self.assertEqual(inc["note"], "got 429s")            # trimmed
+        self.assertEqual(inc["surge_score"], 45.0)
+        self.assertIsInstance(inc["ts"], int)
+        store.add_incident(self.db, "", 5.0, "CALM")         # empty note -> None
+        got = store.recent_incidents(self.db, 3600)
+        self.assertEqual(len(got), 2)
+        self.assertIsNone(got[-1]["note"])                   # blank stored as NULL
+
+    def test_incidents_survive_prune(self):
+        # incidents are ground truth -- prune only touches samples, never incidents
+        store.add_incident(self.db, "keep me", 50.0, "ELEVATED")
+        store.prune(self.db, keep_days=1)
+        self.assertEqual(len(store.recent_incidents(self.db, 86400)), 1)
+
     def test_prune(self):
         now = int(time.time())
         iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
