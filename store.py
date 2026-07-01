@@ -143,6 +143,21 @@ def read_scores_since(path, seconds):
             "WHERE ts >= ? AND surge_score IS NOT NULL ORDER BY ts ASC", (cutoff,))]
 
 
+def prune(path, keep_days):
+    """Delete samples older than keep_days to bound DB growth. No VACUUM (it locks
+    the whole DB) -- pages freed by the delete are reused by future inserts, so the
+    file plateaus at ~the retention window rather than growing forever. keep_days
+    <= 0 disables. Returns rows deleted."""
+    if not keep_days or keep_days <= 0:
+        return 0
+    cutoff = int(time.time() - keep_days * 86400)
+    with _lock:
+        c = _conn(path)
+        cur = c.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
+        c.commit()
+        return cur.rowcount
+
+
 def hourly_baselines(path, signals, days=7, min_samples=60, min_days=2):
     """Per-signal, per-UTC-hour robust baseline from the trailing `days` of
     history: {signal: {hour: (center, robust_sigma)}} where center=median and

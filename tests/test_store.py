@@ -85,6 +85,17 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.import_csvs(self.db, self.dir), 0)     # no-op 2nd time
         self.assertEqual(len(store.read_recent(self.db, 10)), 2)
 
+    def test_prune(self):
+        now = int(time.time())
+        iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
+        store.append(self.db, self._row(iso(now - 100 * 86400), 1))  # 100 days old
+        store.append(self.db, self._row(iso(now - 1 * 86400), 2))    # 1 day old
+        store.append(self.db, self._row(iso(now), 3))                # now
+        self.assertEqual(store.prune(self.db, keep_days=90), 1)      # only the 100d row
+        kept = sorted(r["surge_score"] for r in store.read_recent(self.db, 10))
+        self.assertEqual(kept, [2.0, 3.0])                           # recent rows kept
+        self.assertEqual(store.prune(self.db, 0), 0)                 # 0 = keep forever
+
     def test_hourly_baselines(self):
         now = int(time.time())
         base = (now // 3600) * 3600 - 1800          # mid of the PREVIOUS UTC hour
