@@ -7,14 +7,30 @@ import monitor
 
 
 class HeatTest(unittest.TestCase):
-    def test_heat_mapping(self):
-        self.assertEqual(monitor._heat(None, 1.0), 0.0)     # missing value
-        self.assertEqual(monitor._heat(10, 0), 0.0)          # zero baseline guarded
-        self.assertEqual(monitor._heat(1.0, 1.0), 0.0)       # 1x baseline -> 0
-        self.assertEqual(monitor._heat(2.0, 1.0), 50.0)      # 2x -> 50
-        self.assertEqual(monitor._heat(3.0, 1.0), 100.0)     # 3x -> 100
-        self.assertEqual(monitor._heat(9.0, 1.0), 100.0)     # capped at 100
-        self.assertEqual(monitor._heat(0.5, 1.0), 0.0)       # below baseline -> 0
+    def test_heat_zscore_mapping(self):
+        # _heat(value, center, scale): robust-sigmas above center -> 0..100
+        self.assertEqual(monitor._heat(None, 1.0, 1.0), 0.0)  # missing value
+        self.assertEqual(monitor._heat(10, 1.0, 0), 0.0)      # zero scale guarded
+        self.assertEqual(monitor._heat(1.0, 1.0, 1.0), 0.0)   # 0 sigma -> 0
+        self.assertEqual(monitor._heat(2.5, 1.0, 1.0), 50.0)  # +1.5 sigma -> 50
+        self.assertEqual(monitor._heat(4.0, 1.0, 1.0), 100.0) # +3 sigma -> 100
+        self.assertEqual(monitor._heat(10.0, 1.0, 1.0), 100.0)  # capped
+        self.assertEqual(monitor._heat(0.5, 1.0, 1.0), 0.0)   # below center -> 0
+
+    def test_variance_aware(self):
+        # the SAME move (+150 over each ~median) is HOTTER for a steadier signal --
+        # and both signals are driven through the MAD path (scale > the 5%-of-center
+        # floor), so this genuinely exercises the variance mechanism, not the floor.
+        t = monitor.SurgeTracker()
+        for v in (920, 940, 960, 980, 1000, 1020, 1040, 1060, 1080, 1100):
+            t.update({"nonvote_tps": float(v)})               # moderate spread
+        for v in (600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500):
+            t.update({"meme_tps": float(v)})                  # wide spread
+        _, _, comps = t.compute({"nonvote_tps": 1160.0, "meme_tps": 1200.0})  # ~+150 each
+        a, b = comps["nonvote_tps"], comps["meme_tps"]
+        self.assertGreater(a["scale"], 0.05 * a["baseline"])  # MAD, not the floor
+        self.assertGreater(b["scale"], 0.05 * b["baseline"])
+        self.assertGreater(a["heat"], b["heat"])              # steadier -> hotter
 
 
 class LevelTest(unittest.TestCase):

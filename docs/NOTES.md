@@ -159,10 +159,17 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
 - **Last-known-good** on transient source misses (movers, venue data) so the UI
   never blanks; per-section freshness tells the truth when a source lags.
 - **Surge Index** lives in `monitor.py` (`SurgeTracker`, `SURGE_SIGNALS`,
-  `_LEVELS`). Weights/thresholds are a **reasoned prior, NOT calibrated** to real
-  rate-limit events — calibrating against the lander's actual throttling is the
-  single highest-value next step. `compute()` excludes a **missing** signal (None)
-  from the weighted average so an absent source can't deflate the score to 0.
+  `_LEVELS`). Each signal's heat is **self-calibrating and variance-aware**: how
+  many *robust sigmas* it sits above its own rolling baseline — **median** center,
+  **MAD** spread (`1.4826*MAD`, floored at 5% of the baseline so a near-constant
+  signal isn't hair-triggered), `_Z_FULL=3` sigmas → heat 100. Robust stats
+  (median/MAD, not mean/std) because on-chain signals are heavy-tailed; the same %
+  move is hotter for a normally-steady signal than a volatile one. The seed
+  baseline is only the prior until the rolling window fills. Weights/thresholds
+  are still a **reasoned prior, NOT calibrated** to real rate-limit events —
+  calibrating against the lander's actual throttling is the highest-value next
+  step. `compute()` excludes a **missing** signal (None) from the weighted average
+  so an absent source can't deflate the score.
 - **Persistence** is `store.py` (SQLite, stdlib — still zero-dep). One
   `data/monitor.db`; schema is derived from `CSV_FIELDS` with `ALTER TABLE ADD
   COLUMN` evolution (adding a signal is a one-liner, no file migration), appends

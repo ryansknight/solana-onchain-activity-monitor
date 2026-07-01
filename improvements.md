@@ -53,11 +53,21 @@ the SOL price. Risk-on regimes drive Solana frenzies — leading-ish context.
 
 ## B. Algorithm upgrades
 
-### B1. Self-calibrating normalization  📋 (biggest algo win)
-Replace fixed seed baselines (`SURGE_SIGNALS`) with rolling per-signal normalization
-— EWMA mean/σ z-score or rolling quantiles, ideally bucketed by time-of-day. Makes
-the index adapt to the real distribution instead of a hand-tuned prior. Extends the
-percentile work already shipped.
+### B1. Self-calibrating normalization  ✅ shipped
+Each signal's heat is now a **robust z-score** — how many sigmas above its own
+rolling baseline (median center + MAD spread, floored) it sits — instead of a fixed
+multiple of the median. Variance-aware (a steady signal lights up on a small move,
+a volatile one needs more) and robust to heavy tails. Seed baseline is only the
+prior until the window fills. See monitor.py `_heat`/`center_scale`, NOTES §6.
+**Known limit (inherent to the ~10-min rolling window):** a surge that develops
+*inside* the window inflates that signal's own MAD, damping its onset heat (and a
+sustained surge >window drifts the median up and latches — partly shared with the
+old median-baseline code). Fine for the common *sudden* meme spike (window is
+still pre-spike → high heat); weaker for slow ramps.
+**Follow-up (B1b):** bucket the baseline by **time-of-day / multi-day** ("unusual
+for this hour") — a cheap SQL `GROUP BY` on the SQLite history. This is the real
+fix for the ramp/latching limit above (compare against days-ago normal, not the
+last 10 min), and worth doing once a few weeks of data accrue.
 
 ### B2. Leading vs current-stress sub-indices  📋
 Split into an "early warning" sub-index (pump-launch acceleration, fee-market slope)
